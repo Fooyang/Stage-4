@@ -17,19 +17,47 @@ const Status createHeapFile(const string fileName)
     {
 		// file doesn't exist. First create it and allocate
 		// an empty header page and data page.
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
+        // file doesn't exist. First create it and allocate
+        // an empty header page and data page.
+        status = db.createFile(fileName);
+        if (status != OK) return status;
+        
+        // Open the newly created file
+        status = db.openFile(fileName, file);
+        if (status != OK) return status;
+        
+        // Allocate and initialize the header page
+        status = bufMgr->allocPage(file, hdrPageNo, newPage);
+        if (status != OK) return status;
+        
+        hdrPage = (FileHdrPage*) newPage;
+        
+        strcpy(hdrPage->fileName, fileName.c_str());
+        
+        // Allocate and initialize the first data page
+        status = bufMgr->allocPage(file, newPageNo, newPage);
+        if (status != OK) return status;
+        
+        newPage->init(newPageNo);
+        
+        // Set up the header page to point to the first data page
+        hdrPage->firstPage = newPageNo;
+        hdrPage->lastPage = newPageNo;
+        hdrPage->pageCnt = 1;
+        hdrPage->recCnt = 0;
+        
+        // Unpin both pages (marked as dirty)
+        status = bufMgr->unPinPage(file, hdrPageNo, true);
+        if (status != OK) return status;
+        
+        status = bufMgr->unPinPage(file, newPageNo, true);
+        if (status != OK) return status;
+        
+        // Close the file
+        status = db.closeFile(file);
+        if (status != OK) return status;
+        
+        return OK;
     }
     return (FILEEXISTS);
 }
@@ -51,17 +79,47 @@ HeapFile::HeapFile(const string & fileName, Status& returnStatus)
     // open the file and read in the header page and the first data page
     if ((status = db.openFile(fileName, filePtr)) == OK)
     {
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		
+        // Get the header page
+        status = filePtr->getFirstPage(headerPageNo);
+        if (status != OK)
+        {
+            returnStatus = status;
+            return;
+        }
+        
+        status = bufMgr->readPage(filePtr, headerPageNo, pagePtr);
+        if (status != OK)
+        {
+            returnStatus = status;
+            return;
+        }
+        
+        headerPage = (FileHdrPage*) pagePtr;
+        hdrDirtyFlag = false;
+        
+        // Get the first data page if it exists
+        if (headerPage->firstPage != -1)
+        {
+            status = bufMgr->readPage(filePtr, headerPage->firstPage, curPage);
+            if (status != OK)
+            {
+                // Unpin header page before returning
+                bufMgr->unPinPage(filePtr, headerPageNo, false);
+                returnStatus = status;
+                return;
+            }
+            curPageNo = headerPage->firstPage;
+            curDirtyFlag = false;
+        }
+        else
+        {
+            curPage = NULL;
+            curPageNo = -1;
+            curDirtyFlag = false;
+        }
+        
+        curRec = NULLRID;
+        returnStatus = OK;
     }
     else
     {
@@ -121,12 +179,31 @@ const Status HeapFile::getRecord(const RID & rid, Record & rec)
 
     // cout<< "getRecord. record (" << rid.pageNo << "." << rid.slotNo << ")" << endl;
    
-   
-   
-   
-   
-   
-   
+    // If record not on current page, need to read it in
+    if (curPage == NULL || rid.pageNo != curPageNo)
+    {
+        // Unpin current page if it exists
+        if (curPage != NULL)
+        {
+            status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+            if (status != OK) return status;
+            curPage = NULL;
+        }
+        
+        // Read in the requested page
+        status = bufMgr->readPage(filePtr, rid.pageNo, curPage);
+        if (status != OK) return status;
+        
+        curPageNo = rid.pageNo;
+        curDirtyFlag = false;
+    }
+
+    // Get the record from the current page
+    status = curPage->getRecord(rid, rec);
+    if (status == OK) {
+        curRec = rid;  // Set current record to the one we just retrieved
+    }
+    return status;
 }
 
 HeapFileScan::HeapFileScan(const string & name,
@@ -370,5 +447,3 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
   
   
 }
-
-
