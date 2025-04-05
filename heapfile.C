@@ -198,23 +198,21 @@ const Status HeapFile::getRecord(const RID & rid, Record & rec)
         // Read in the requested page
         status = bufMgr->readPage(filePtr, rid.pageNo, curPage);
         if (status != OK) {
-            curPage = NULL;  // Make sure curPage is NULL if read fails
             return status;
         }
-        
         curPageNo = rid.pageNo;
         curDirtyFlag = false;
     }
-
-    // Get the record from the current page
-    status = curPage->getRecord(rid, rec);
     
-    // Only update curRec if we successfully got the record
-    if (status == OK) {
-        curRec = rid;
+    // Get the record from the page
+    status = curPage->getRecord(rid, rec);
+    if (status != OK) {
+        return status;
     }
     
-    return status;
+    // Update current record
+    curRec = rid;
+    return OK;
 }
 
 HeapFileScan::HeapFileScan(const string & name,
@@ -306,172 +304,88 @@ const Status HeapFileScan::resetScan()
 
 const Status HeapFileScan::scanNext(RID& outRid)
 {
-    Status 	status = OK;
-    RID		nextRid;
-    RID		tmpRid;
-    int 	nextPageNo;
-    Record      rec;
+    Status status;
+    RID nextRid;
+    Record rec;
+    bool found = false;
 
-    // If no current page, start from the first page
+    // If no current page, start from first page
     if (curPage == NULL) {
-        // Get the first page from the header
         if (headerPage->firstPage == -1) {
-            return FILEEOF;  // Empty file
+            return NORECORDS;
         }
-        
         status = bufMgr->readPage(filePtr, headerPage->firstPage, curPage);
         if (status != OK) return status;
         curPageNo = headerPage->firstPage;
         curDirtyFlag = false;
         
-        // Get first record on the page
-        status = curPage->firstRecord(tmpRid);
-        if (status == OK) {
-            status = curPage->getRecord(tmpRid, rec);
-            if (status != OK) return status;
-            
-            if (matchRec(rec)) {
-                curRec = tmpRid;
-                outRid = curRec;
-                return OK;
+        // Get first record on page
+        status = curPage->firstRecord(curRec);
+        if (status != OK) {
+            if (status == NORECORDS) {
+                // Page is empty, try next page
+                return scanNext(outRid);
             }
-            curRec = tmpRid;  // Continue scanning from this record
-        } else if (status == NORECORDS) {
-            // Try next page if this one is empty
-            status = curPage->getNextPage(nextPageNo);
-            if (status != OK) return status;
-            
-            if (nextPageNo == -1) {
-                // No more pages
-                status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-                curPage = NULL;
-                curPageNo = -1;
-                curDirtyFlag = false;
-                return FILEEOF;
-            }
-            
-            // Unpin current page
-            status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-            if (status != OK) return status;
-            
-            // Read next page
-            status = bufMgr->readPage(filePtr, nextPageNo, curPage);
-            if (status != OK) return status;
-            
-            curPageNo = nextPageNo;
-            curDirtyFlag = false;
-            
-            // Get first record on new page
-            status = curPage->firstRecord(tmpRid);
-            if (status == OK) {
-                status = curPage->getRecord(tmpRid, rec);
-                if (status != OK) return status;
-                
-                if (matchRec(rec)) {
-                    curRec = tmpRid;
-                    outRid = curRec;
-                    return OK;
-                }
-                curRec = tmpRid;  // Continue scanning from this record
-            }
-        }
-    }
-
-    // Continue scanning from current position
-    while (true) {
-        // Try to get next record on current page
-        status = curPage->nextRecord(curRec, nextRid);
-        
-        if (status == OK) {
-            // Found next record on current page
-            status = curPage->getRecord(nextRid, rec);
-            if (status != OK) return status;
-            
-            if (matchRec(rec)) {
-                curRec = nextRid;
-                outRid = curRec;
-                return OK;
-            }
-            curRec = nextRid;  // Continue scanning from this record
-        } else if (status == ENDOFPAGE) {
-            // No more records on current page, try next page
-            status = curPage->getNextPage(nextPageNo);
-            if (status != OK) return status;
-            
-            if (nextPageNo == -1) {
-                // No more pages in file
-                status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-                curPage = NULL;
-                curPageNo = -1;
-                curDirtyFlag = false;
-                return FILEEOF;
-            }
-            
-            // Unpin current page and read next page
-            status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-            if (status != OK) return status;
-            
-            status = bufMgr->readPage(filePtr, nextPageNo, curPage);
-            if (status != OK) return status;
-            
-            curPageNo = nextPageNo;
-            curDirtyFlag = false;
-            
-            // Get first record on new page
-            status = curPage->firstRecord(tmpRid);
-            if (status == OK) {
-                status = curPage->getRecord(tmpRid, rec);
-                if (status != OK) return status;
-                
-                if (matchRec(rec)) {
-                    curRec = tmpRid;
-                    outRid = curRec;
-                    return OK;
-                }
-                curRec = tmpRid;  // Continue scanning from this record
-            }
-        } else if (status == NORECORDS) {
-            // No more records on current page, try next page
-            status = curPage->getNextPage(nextPageNo);
-            if (status != OK) return status;
-            
-            if (nextPageNo == -1) {
-                // No more pages in file
-                status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-                curPage = NULL;
-                curPageNo = -1;
-                curDirtyFlag = false;
-                return FILEEOF;
-            }
-            
-            // Unpin current page and read next page
-            status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-            if (status != OK) return status;
-            
-            status = bufMgr->readPage(filePtr, nextPageNo, curPage);
-            if (status != OK) return status;
-            
-            curPageNo = nextPageNo;
-            curDirtyFlag = false;
-            
-            // Get first record on new page
-            status = curPage->firstRecord(tmpRid);
-            if (status == OK) {
-                status = curPage->getRecord(tmpRid, rec);
-                if (status != OK) return status;
-                
-                if (matchRec(rec)) {
-                    curRec = tmpRid;
-                    outRid = curRec;
-                    return OK;
-                }
-                curRec = tmpRid;  // Continue scanning from this record
-            }
-        } else {
-            // Some other error occurred
             return status;
         }
     }
+
+    // Try to get next record on current page
+    status = curPage->nextRecord(curRec, nextRid);
+    if (status == OK) {
+        // Found next record on current page
+        curRec = nextRid;
+    } else if (status == ENDOFPAGE) {
+        // Need to move to next page
+        int nextPageNo;
+        status = curPage->getNextPage(nextPageNo);
+        if (status != OK) return status;
+        
+        if (nextPageNo == -1) {
+            // No more pages
+            return FILEEOF;
+        }
+        
+        // Unpin current page
+        status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+        if (status != OK) return status;
+        
+        // Read next page
+        status = bufMgr->readPage(filePtr, nextPageNo, curPage);
+        if (status != OK) return status;
+        curPageNo = nextPageNo;
+        curDirtyFlag = false;
+        
+        // Get first record on new page
+        status = curPage->firstRecord(curRec);
+        if (status != OK) {
+            if (status == NORECORDS) {
+                // Page is empty, try next page
+                return scanNext(outRid);
+            }
+            return status;
+        }
+    } else {
+        return status;
+    }
+
+    // If no filter, return the record
+    if (filter == NULL) {
+        outRid = curRec;
+        return OK;
+    }
+
+    // Check if record matches filter
+    status = curPage->getRecord(curRec, rec);
+    if (status != OK) return status;
+
+    if (matchRec(rec)) {
+        outRid = curRec;
+        return OK;
+    }
+
+    // Record doesn't match filter, try next record
+    return scanNext(outRid);
 }
 
 
@@ -583,36 +497,26 @@ InsertFileScan::~InsertFileScan()
 // Insert a record into the file
 const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
 {
-    Page*	newPage;
-    int		newPageNo;
-    Status	status, unpinstatus;
-    RID		rid;
+    Status status;
+    Page* newPage;
+    int newPageNo;
 
-    // check for very large records
-    if ((unsigned int) rec.length > PAGESIZE-DPFIXED)
-    {
-        // will never fit on a page, so don't even bother looking
-        return INVALIDRECLEN;
-    }
-
-    // If no current page, get the last page
+    // If no current page, start with the last page
     if (curPage == NULL) {
         if (headerPage->lastPage == -1) {
-            // File is empty, need to create first page
+            // File is empty, allocate first page
             status = bufMgr->allocPage(filePtr, newPageNo, newPage);
             if (status != OK) return status;
             
             newPage->init(newPageNo);
-            
-            // Update header page
             headerPage->firstPage = newPageNo;
             headerPage->lastPage = newPageNo;
             headerPage->pageCnt = 1;
-            hdrDirtyFlag = true;
             
             curPage = newPage;
             curPageNo = newPageNo;
-            curDirtyFlag = false;
+            curDirtyFlag = true;
+            hdrDirtyFlag = true;
         } else {
             // Read the last page
             status = bufMgr->readPage(filePtr, headerPage->lastPage, curPage);
@@ -622,57 +526,55 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
         }
     }
 
-    // Try to insert the record into the current page
-    status = curPage->insertRecord(rec, rid);
-    
+    // Try to insert the record on the current page
+    status = curPage->insertRecord(rec, outRid);
     if (status == OK) {
-        // Successfully inserted record
-        outRid = rid;
-        curDirtyFlag = true;
+        // Record inserted successfully
         headerPage->recCnt++;
         hdrDirtyFlag = true;
-        return OK;
-    } else if (status == NOSPACE) {
-        // Current page is full, need to allocate a new page
-        status = bufMgr->allocPage(filePtr, newPageNo, newPage);
-        if (status != OK) return status;
-        
-        // Initialize the new page
-        newPage->init(newPageNo);
-        
-        // Link the new page to the current page
-        status = curPage->setNextPage(newPageNo);
-        if (status != OK) {
-            bufMgr->unPinPage(filePtr, newPageNo, false);
-            return status;
-        }
-        
-        // Update header page
-        headerPage->lastPage = newPageNo;
-        headerPage->pageCnt++;
-        hdrDirtyFlag = true;
-        
-        // Unpin the current page
-        unpinstatus = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-        if (unpinstatus != OK) return unpinstatus;
-        
-        // Make the new page the current page
-        curPage = newPage;
-        curPageNo = newPageNo;
-        curDirtyFlag = false;
-        
-        // Try to insert the record into the new page
-        status = curPage->insertRecord(rec, rid);
-        if (status != OK) return status;
-        
-        // Successfully inserted record
-        outRid = rid;
         curDirtyFlag = true;
-        headerPage->recCnt++;
-        hdrDirtyFlag = true;
         return OK;
-    } else {
-        // Some other error occurred
+    }
+
+    if (status != NOSPACE) {
+        // Some error other than no space
         return status;
     }
+
+    // Current page is full, allocate a new page
+    status = bufMgr->allocPage(filePtr, newPageNo, newPage);
+    if (status != OK) return status;
+
+    // Initialize the new page
+    newPage->init(newPageNo);
+    
+    // Link the new page to the last page
+    status = curPage->setNextPage(newPageNo);
+    if (status != OK) {
+        bufMgr->unPinPage(filePtr, newPageNo, false);
+        return status;
+    }
+
+    // Update header page
+    headerPage->lastPage = newPageNo;
+    headerPage->pageCnt++;
+    hdrDirtyFlag = true;
+
+    // Unpin the old page
+    status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+    if (status != OK) return status;
+
+    // Make the new page the current page
+    curPage = newPage;
+    curPageNo = newPageNo;
+    curDirtyFlag = true;
+
+    // Try to insert the record on the new page
+    status = curPage->insertRecord(rec, outRid);
+    if (status != OK) return status;
+
+    // Record inserted successfully
+    headerPage->recCnt++;
+    hdrDirtyFlag = true;
+    return OK;
 }
