@@ -304,10 +304,11 @@ const Status HeapFileScan::resetScan()
 
 const Status HeapFileScan::scanNext(RID& outRid)
 {
-    Status status;
-    RID nextRid;
-    Record rec;
-    bool found = false;
+    Status 	status = OK;
+    RID		nextRid;
+    RID		tmpRid;
+    int 	nextPageNo;
+    Record  rec;
 
     // If no current page, start from first page
     if (curPage == NULL) {
@@ -320,7 +321,7 @@ const Status HeapFileScan::scanNext(RID& outRid)
         curDirtyFlag = false;
         
         // Get first record on page
-        status = curPage->firstRecord(curRec);
+        status = curPage->firstRecord(tmpRid);
         if (status != OK) {
             if (status == NORECORDS) {
                 // Page is empty, try next page
@@ -328,6 +329,7 @@ const Status HeapFileScan::scanNext(RID& outRid)
             }
             return status;
         }
+        curRec = tmpRid;
     }
 
     // Try to get next record on current page
@@ -337,7 +339,6 @@ const Status HeapFileScan::scanNext(RID& outRid)
         curRec = nextRid;
     } else if (status == ENDOFPAGE) {
         // Need to move to next page
-        int nextPageNo;
         status = curPage->getNextPage(nextPageNo);
         if (status != OK) return status;
         
@@ -357,7 +358,7 @@ const Status HeapFileScan::scanNext(RID& outRid)
         curDirtyFlag = false;
         
         // Get first record on new page
-        status = curPage->firstRecord(curRec);
+        status = curPage->firstRecord(tmpRid);
         if (status != OK) {
             if (status == NORECORDS) {
                 // Page is empty, try next page
@@ -365,6 +366,7 @@ const Status HeapFileScan::scanNext(RID& outRid)
             }
             return status;
         }
+        curRec = tmpRid;
     } else {
         return status;
     }
@@ -497,9 +499,10 @@ InsertFileScan::~InsertFileScan()
 // Insert a record into the file
 const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
 {
-    Status status;
-    Page* newPage;
-    int newPageNo;
+    Page*	newPage;
+    int		newPageNo;
+    Status	status, unpinstatus;
+    RID		rid;
 
     // If no current page, start with the last page
     if (curPage == NULL) {
@@ -527,9 +530,10 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
     }
 
     // Try to insert the record on the current page
-    status = curPage->insertRecord(rec, outRid);
+    status = curPage->insertRecord(rec, rid);
     if (status == OK) {
         // Record inserted successfully
+        outRid = rid;
         headerPage->recCnt++;
         hdrDirtyFlag = true;
         curDirtyFlag = true;
@@ -561,8 +565,8 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
     hdrDirtyFlag = true;
 
     // Unpin the old page
-    status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
-    if (status != OK) return status;
+    unpinstatus = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+    if (unpinstatus != OK) return unpinstatus;
 
     // Make the new page the current page
     curPage = newPage;
@@ -570,10 +574,11 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
     curDirtyFlag = true;
 
     // Try to insert the record on the new page
-    status = curPage->insertRecord(rec, outRid);
+    status = curPage->insertRecord(rec, rid);
     if (status != OK) return status;
 
     // Record inserted successfully
+    outRid = rid;
     headerPage->recCnt++;
     hdrDirtyFlag = true;
     return OK;
